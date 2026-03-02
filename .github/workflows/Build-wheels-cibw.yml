@@ -6,11 +6,7 @@ name: Build pymuhrec wheels (cibuildwheel)
 on:
   workflow_dispatch:
   pull_request:
-    branches:
-      - 'master'
   push:
-    branches:
-      - 'master'
 
 env:
   CONAN_HOME: ${{ github.workspace }}/Cache/
