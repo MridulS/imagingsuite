@@ -1,0 +1,111 @@
+# This workflow builds pymuhrec wheels using cibuildwheel on multiple platforms.
+# It replaces the per-Python-version matrix with cibuildwheel's internal iteration,
+# reducing the number of CI jobs from 16 (4 OS x 4 Python) to 4 (1 per OS).
+name: Build pymuhrec wheels (cibuildwheel)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - 'master'
+  push:
+    branches:
+      - 'master'
+
+env:
+  CONAN_HOME: ${{ github.workspace }}/Cache/
+
+jobs:
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-13, macos-14, windows-2022]
+
+    steps:
+    - name: Checkout imagingsuite
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Checkout TestData
+      uses: actions/checkout@v4
+      with:
+        repository: neutronimaging/TestData
+        path: TestData
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install cibuildwheel
+      run: python -m pip install cibuildwheel
+
+    - name: Conan installation
+      uses: turtlebrowser/get-conan@main
+
+    - name: Cache Conan packages
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.CONAN_HOME }}
+        key: conan-cibw-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('conanfile.py') }}
+        restore-keys: |
+          conan-cibw-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Install sse2neon (macOS ARM only)
+      if: runner.os == 'macOS' && runner.arch == 'ARM64'
+      run: brew install sse2neon
+
+    - name: Build wheels with cibuildwheel
+      run: python -m cibuildwheel --output-dir wheelhouse .
+
+    - name: Upload wheels
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-${{ runner.os }}-${{ runner.arch }}
+        path: wheelhouse/*.whl
+
+  test_wheels:
+    name: Test on ${{ matrix.os }} / Python ${{ matrix.python }}
+    needs: build_wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-13, macos-14, windows-2022]
+        python: ['3.10', '3.11', '3.12', '3.13']
+
+    steps:
+    - name: Checkout (for test files)
+      uses: actions/checkout@v4
+
+    - name: Checkout TestData
+      uses: actions/checkout@v4
+      with:
+        repository: neutronimaging/TestData
+        path: TestData
+
+    - name: Set up Python ${{ matrix.python }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python }}
+
+    - name: Download wheels
+      uses: actions/download-artifact@v4
+      with:
+        name: wheels-${{ runner.os }}-${{ runner.arch }}
+        path: wheelhouse
+
+    - name: Install wheel and test dependencies
+      shell: bash
+      run: |
+        pip install pytest
+        # Install the wheel matching this Python version
+        PYVER=$(echo "${{ matrix.python }}" | tr -d '.')
+        pip install wheelhouse/*cp${PYVER}*.whl
+
+    - name: Run tests
+      run: pytest package/tests -v
