@@ -5,7 +5,7 @@ from conan.tools.files import copy
 import os
 import sys
 import shutil
-from six import StringIO
+from io import StringIO
 
 class MuhrecRecipe(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
@@ -30,7 +30,7 @@ class MuhrecRecipe(ConanFile):
 
     def build_requirements(self): # Only used if conanbuild.bat environment is used, such as by "conan build ."
         self.tool_requires("ninja/[1.13.1]")
-        self.tool_requires("cmake/[4.1.2]") 
+        self.tool_requires("cmake/[4.1.2]")
 
     def layout(self):
         cmake_layout(
@@ -42,6 +42,15 @@ class MuhrecRecipe(ConanFile):
         deps = CMakeDeps(self)
         deps.generate()
         tc = CMakeToolchain(self, generator="Ninja") #default is None
+        # Pass BUILD_GUI from environment to CMake
+        build_gui = os.environ.get("BUILD_GUI", "ON")
+        tc.cache_variables["BUILD_GUI"] = build_gui
+        # Pin the Python executable so CMake uses the same Python that Conan runs under
+        # (critical for cibuildwheel where multiple Python versions coexist).
+        # Set both Python3_EXECUTABLE (for CMakeLists.txt find_package(Python3))
+        # and Python_EXECUTABLE (for pybind11's find_package(Python)).
+        tc.cache_variables["Python3_EXECUTABLE"] = sys.executable
+        tc.cache_variables["Python_EXECUTABLE"] = sys.executable
         tc.generate()
         ms = VirtualRunEnv(self)
         ms.generate()
@@ -57,42 +66,46 @@ class MuhrecRecipe(ConanFile):
             if len(dep.cpp_info.libdirs)>0:
                 copy(self, "*.so*", dep.cpp_info.libdirs[0], self.lib_folder)
                 copy(self, "*.dylib", dep.cpp_info.libdirs[0], self.lib_folder)
-            
-        # Copy dynamic libraries from qt
-        qtpath = os.environ["QTPATH"]
-        Qt_dynamic_library_list = ["Qt6PrintSupport", "Qt6Charts", "Qt6OpenGLWidgets", "Qt6OpenGl", "Qt6Test"]
-        Qt_linux_library_list = ["Qt6Core","Qt6Gui","Qt6Widgets","Qt6DBus","Qt6XcbQpa","icui18n","icudata","icuuc"]
-        for library in Qt_dynamic_library_list:
-            copy(self, library+".dll", os.path.join(qtpath, "bin"), bin_folder)
-            #copy(self, library+".dylib", os.path.join(qtpath, "bin"), bin_folder)
-            copy(self, "lib"+library+".so*", os.path.join(qtpath, "lib"), self.lib_folder)
-        if self.settings.os == "Linux":
-            for library in Qt_linux_library_list:
+
+        # Copy dynamic libraries from Qt (only when building GUI apps)
+        qtpath = os.environ.get("QTPATH", "")
+        if qtpath:
+            Qt_dynamic_library_list = ["Qt6PrintSupport", "Qt6Charts", "Qt6OpenGLWidgets", "Qt6OpenGl", "Qt6Test"]
+            Qt_linux_library_list = ["Qt6Core","Qt6Gui","Qt6Widgets","Qt6DBus","Qt6XcbQpa","icui18n","icudata","icuuc"]
+            for library in Qt_dynamic_library_list:
+                copy(self, library+".dll", os.path.join(qtpath, "bin"), bin_folder)
+                #copy(self, library+".dylib", os.path.join(qtpath, "bin"), bin_folder)
                 copy(self, "lib"+library+".so*", os.path.join(qtpath, "lib"), self.lib_folder)
-            copy(self, "libqxcb.so", os.path.join(qtpath, "plugins", "platforms"), os.path.join(bin_folder, "platforms"))
-        
-        if self.settings.os == "Windows":
-            dst = os.path.join(bin_folder,"resources")
-        elif self.settings.os == "Linux":
-            dst = os.path.join(bin_folder,"..","resources")
-        else:
-            dst = os.path.join(self.framework_folder_MuhRec,"..",'Resources')
-            if self.settings.arch == "armv8":
-                sse2neon_dir = StringIO()
-                self.run("brew --prefix sse2neon", stdout=sse2neon_dir)
-                sse2neon = sse2neon_dir.getvalue().strip()
-                copy(self, 'sse2neon/sse2neon.h', os.path.join(sse2neon, "include"), self.lib_folder)
-        shutil.copytree(
-            os.path.join(self.source_folder,"applications","muhrec","Resources"), 
-            dst,
-            dirs_exist_ok=True,
-            )
-        copy(self, "viewer_icon.svg", os.path.join(self.source_folder, "applications", "imageviewer","resources"), dst)
+            if self.settings.os == "Linux":
+                for library in Qt_linux_library_list:
+                    copy(self, "lib"+library+".so*", os.path.join(qtpath, "lib"), self.lib_folder)
+                copy(self, "libqxcb.so", os.path.join(qtpath, "plugins", "platforms"), os.path.join(bin_folder, "platforms"))
+
+        # sse2neon header for macOS ARM builds
+        if self.settings.os == "Macos" and self.settings.arch == "armv8":
+            sse2neon_dir = StringIO()
+            self.run("brew --prefix sse2neon", stdout=sse2neon_dir)
+            sse2neon = sse2neon_dir.getvalue().strip()
+            copy(self, 'sse2neon/sse2neon.h', os.path.join(sse2neon, "include"), self.lib_folder)
+
+        # Copy MuhRec resources (only when building GUI apps)
+        resources_dir = os.path.join(self.source_folder, "applications", "muhrec", "Resources")
+        if qtpath and os.path.isdir(resources_dir):
+            if self.settings.os == "Windows":
+                dst = os.path.join(bin_folder, "resources")
+            elif self.settings.os == "Linux":
+                dst = os.path.join(bin_folder, "..", "resources")
+            else:
+                dst = os.path.join(self.framework_folder_MuhRec, "..", "Resources")
+            shutil.copytree(resources_dir, dst, dirs_exist_ok=True)
+            copy(self, "viewer_icon.svg", os.path.join(self.source_folder, "applications", "imageviewer", "resources"), dst)
 
     def build(self):
         cmake = CMake(self)
         cmake.configure()
         cmake.build()
         if self.settings.os == "Macos":
-            copy(self, "*.dylib", self.lib_folder, self.framework_folder_MuhRec, excludes='*cpython*')
-            copy(self, "*.dylib", self.lib_folder, self.framework_folder_imageviewer, excludes='*cpython*')
+            if os.path.isdir(self.framework_folder_MuhRec):
+                copy(self, "*.dylib", self.lib_folder, self.framework_folder_MuhRec, excludes='*cpython*')
+            if os.path.isdir(self.framework_folder_imageviewer):
+                copy(self, "*.dylib", self.lib_folder, self.framework_folder_imageviewer, excludes='*cpython*')

@@ -23,6 +23,3 @@ where = ["."]
 
 [tool.setuptools.package-data]
 pymuhrec = ["*.dll", "*.pyd", "*.so*", "*.dylib"]
-
-#[tool.cibuildwheel]
-#build = 'cp312*'

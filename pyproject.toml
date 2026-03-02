@@ -1,0 +1,52 @@
+# Root-level pyproject.toml for cibuildwheel builds.
+# When building via cibuildwheel, the entire repo is used as the package directory
+# so that C++ sources, Conan config, and build scripts are available in the container.
+#
+# For direct builds (python -m build), use package/pyproject.toml instead.
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pymuhrec"
+authors = [{name = "Anders Kaestner"}]
+description = "pymuhrec package"
+version = "0.0.1"
+dependencies = [
+    "astropy",
+    "numpy",
+    "scipy",
+    "tqdm",
+    "scikit-image",
+    "jupyter",
+    "matplotlib"
+]
+
+[tool.setuptools.packages.find]
+where = ["package"]
+
+[tool.setuptools.package-data]
+pymuhrec = ["*.dll", "*.pyd", "*.so*", "*.dylib"]
+
+[tool.cibuildwheel]
+build = "cp310-* cp311-* cp312-* cp313-*"
+skip = "*-win32 *-manylinux_i686 *-musllinux*"
+test-requires = ["pytest"]
+test-command = "pytest {project}/package/tests/muhrectomo/test_reconstructor.py -v"
+
+[tool.cibuildwheel.linux]
+before-all = "yum install -y gcc-toolset-11-gcc gcc-toolset-11-gcc-c++ gcc-toolset-11-binutils patchelf"
+before-build = "pip install conan && bash {project}/scripts/cibw_build.sh linux {project}"
+environment = { PATH = "/opt/rh/gcc-toolset-11/root/usr/bin:/usr/local/bin:$PATH", BUILD_GUI = "OFF" }
+manylinux-x86_64-image = "manylinux_2_28"
+repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
+
+[tool.cibuildwheel.macos]
+before-build = "pip install conan && bash {project}/scripts/cibw_build.sh macos {project}"
+environment = { BUILD_GUI = "OFF" }
+repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
+
+[tool.cibuildwheel.windows]
+before-build = "pip install conan && bash {project}/scripts/cibw_build.sh windows {project}"
+environment = { BUILD_GUI = "OFF" }
